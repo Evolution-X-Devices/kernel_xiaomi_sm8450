@@ -84,3 +84,4 @@ msm_qmp.ko
 qcom_cpucp.ko
 bcl_pmic5.ko
 qcom-rng.ko
+hwid.ko
