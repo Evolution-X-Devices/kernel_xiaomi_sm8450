@@ -286,6 +286,8 @@ static ssize_t quick_charge_type_show(const struct class *c,
 		verify_digiest = pst->prop[XM_PROP_PD_VERIFED];
 
 		rc = read_property_id(bcdev, pst, XM_PROP_POWER_MAX);
+		if (rc < 0)
+			return rc;
 		power_max = pst->prop[XM_PROP_POWER_MAX];
 
 		if (real_charger_type == POWER_SUPPLY_USB_TYPE_PD_PPS && verify_digiest ==1) {
@@ -315,6 +317,8 @@ static ssize_t quick_charge_type_show(const struct class *c,
 	if(wls_present) {
 		pst = &bcdev->psy_list[PSY_TYPE_XM];
 		rc = read_property_id(bcdev, pst, XM_PROP_POWER_MAX);
+		if (rc < 0)
+			return rc;
 		power_max = pst->prop[XM_PROP_POWER_MAX];
 
 		if(power_max >= 30)
@@ -2027,7 +2031,6 @@ static ssize_t night_charging_show(const struct class *c,
 }
 static CLASS_ATTR_RW(night_charging);
 
-#ifndef CONFIG_MI_CHARGER_M81
 static ssize_t blank_status_store(const struct class *c, const struct class_attribute *attr,
 				  const char *buf, size_t count)
 {
@@ -2089,7 +2092,6 @@ static ssize_t screen_cctog_show(const struct class *c, const struct class_attri
 			 pst->prop[XM_PROP_SCREEN_CCTOG]);
 }
 static CLASS_ATTR_RW(screen_cctog);
-#endif /* !CONFIG_MI_CHARGER_M81 */
 
 static ssize_t fake_temp_store(const struct class *c,
 					const struct class_attribute *attr,
@@ -4996,10 +4998,8 @@ static struct attribute *xiaomi_battery_class_attrs[] = {
 	&class_attr_input_suspend.attr,
 	&class_attr_fastchg_mode.attr,
 	&class_attr_night_charging.attr,
-#ifndef CONFIG_MI_CHARGER_M81
 	&class_attr_blank_status.attr,
 	&class_attr_screen_cctog.attr,
-#endif /* !CONFIG_MI_CHARGER_M81 */
 	&class_attr_shutdown_delay.attr,
 	&class_attr_soc_decimal.attr,
 	&class_attr_soc_decimal_rate.attr,
