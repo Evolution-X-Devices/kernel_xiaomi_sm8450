@@ -468,7 +468,21 @@ static int proc_fib_multipath_hash_fields(struct ctl_table *table, int write,
 }
 #endif
 
+/*
+ * Not per netns (unlike ip_local_reserved_ports) to keep struct netns_ipv4
+ * and the KMI unchanged. Only exposed in the initial netns.
+ */
+static unsigned long local_unbindable_ports[BITS_TO_LONGS(65536)];
+unsigned long *sysctl_local_unbindable_ports = local_unbindable_ports;
+
 static struct ctl_table ipv4_table[] = {
+	{
+		.procname	= "ip_local_unbindable_ports",
+		.data		= &sysctl_local_unbindable_ports,
+		.maxlen		= 65536,
+		.mode		= 0644,
+		.proc_handler	= proc_do_large_bitmap,
+	},
 	{
 		.procname	= "tcp_max_orphans",
 		.data		= &sysctl_tcp_max_orphans,
