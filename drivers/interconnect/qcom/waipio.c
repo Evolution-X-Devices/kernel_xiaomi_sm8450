@@ -740,6 +740,8 @@ static struct qcom_icc_node qnm_mdp = {
 	.qosbox = &qnm_mdp_qos,
 	.num_links = 1,
 	.links = { SLAVE_MNOC_HF_MEM_NOC },
+	.init_peak = INT_MAX,
+	.init_avg = INT_MAX,
 };
 
 static struct qcom_icc_node qnm_mnoc_cfg = {
@@ -1773,6 +1775,8 @@ static struct qcom_icc_node qns_mem_noc_hf = {
 	.noc_ops = &qcom_qnoc4_ops,
 	.num_links = 1,
 	.links = { MASTER_MNOC_HF_MEM_NOC },
+	.init_peak = INT_MAX,
+	.init_avg = INT_MAX,
 };
 
 static struct qcom_icc_node qns_mem_noc_sf = {
