@@ -6648,8 +6648,16 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 static void dwc3_msm_shutdown(struct platform_device *pdev)
 {
 	struct dwc3_msm	*mdwc = platform_get_drvdata(pdev);
+	struct dwc3 *dwc = mdwc->dwc3 ? platform_get_drvdata(mdwc->dwc3) : NULL;
 
 	dbg_log_string("Entry\n");
+	/*
+	 * Drop the pull-up first. Otherwise, with a host still attached,
+	 * dwc3_otg_start_peripheral(0) waits up to 20 s for dwc->connected
+	 * to clear before it suspends the core, which delays every reboot.
+	 */
+	if (dwc && dwc->gadget && dwc->gadget->udc && mdwc->in_device_mode)
+		usb_gadget_disconnect(dwc->gadget);
 	dwc3_msm_set_role(mdwc, USB_ROLE_NONE);
 	mdwc->dis_role_switch = true;
 	flush_workqueue(mdwc->sm_usb_wq);
