@@ -69,8 +69,19 @@ static int ksu_handle_inode_event(struct fsnotify_mark *mark, u32 mask,
     return 0;
 }
 
+/*
+ * The kernel calls group->ops->free_mark() unconditionally from
+ * fsnotify_final_mark_destroy() (no NULL check), and the marks here come from
+ * kzalloc() - not from fsnotify_mark_cache - so this is what releases them.
+ */
+static void ksu_free_mark(struct fsnotify_mark *mark)
+{
+	kfree(mark);
+}
+
 static const struct fsnotify_ops ksu_ops = {
 	.handle_inode_event = ksu_handle_inode_event,
+	.free_mark = ksu_free_mark,
 };
 
 static int add_mark_on_inode(struct inode *inode, u32 mask,
@@ -155,6 +166,16 @@ int ksu_observer_init(void)
 void __exit ksu_observer_exit(void)
 {
 	unwatch_one_dir(&g_watch);
+	/*
+	 * A group's marks are released by a delayed work
+	 * (fsnotify_mark_destroy_workfn) that runs after synchronize_srcu() and calls
+	 * group->ops->free_mark(), reading mark->group on the way.  Drain that work
+	 * *before* dropping the group: dropping it first makes those callbacks read a
+	 * freed group, and returning before the work has run at all lets the module be
+	 * unloaded while the callback text is still pending - either way, a
+	 * use-after-free in fsnotify_mark_destroy_workfn.
+	 */
+	fsnotify_wait_marks_destroyed();
 	fsnotify_put_group(g);
 	pr_info("observer exit done\n");
 }

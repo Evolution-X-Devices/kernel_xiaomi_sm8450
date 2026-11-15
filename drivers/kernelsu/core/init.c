@@ -27,6 +27,7 @@
 #include "feature/shell_su_adb_only.h"
 #include "feature/sulog.h"
 #include "infra/symbol_resolver.h"
+#include "preinit/preinit.h"
 
 #if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)
 #include <asm/cpufeature.h>
@@ -93,6 +94,8 @@ module_param_named(bundled, ksu_bundled, bool, 0);
 
 int __init kernelsu_init(void)
 {
+	int ret;
+
 #ifdef KSU_MANAGER_PACKAGE
 	pr_info("welcome to KernelSU version " __stringify(KERNEL_SU_VERSION) ", package name " KSU_MANAGER_PACKAGE "\n");
 #else
@@ -139,7 +142,16 @@ int __init kernelsu_init(void)
 		return -ENOSYS;
 	}
 
+	pr_info("initializing symbol resolver\n");
 	ksu_init_symbol_resolver();
+
+	ret = ksu_selinux_inode_init();
+	if (ret) {
+		put_cred(ksu_cred);
+		ksu_cred = NULL;
+		return ret;
+	}
+
 	ksu_syscall_hook_init();
 
 	// Block modules early, before vendor modules are loaded in second stage.
@@ -195,6 +207,8 @@ int __init kernelsu_init(void)
 
 		ksu_ksud_init();
 
+		ksu_preinit_init();
+
 		ksu_file_wrapper_init();
 	}
 
@@ -213,8 +227,10 @@ void __exit kernelsu_exit(void)
 
 	ksu_supercalls_exit();
 
-	if (!ksu_late_loaded)
+	if (!ksu_late_loaded) {
 		ksu_ksud_exit();
+		ksu_preinit_exit();
+	}
 
 	// Wait for any in-flight RCU readers (e.g. handler traversing allow_list)
 	synchronize_rcu();
