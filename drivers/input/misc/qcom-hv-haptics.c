@@ -6443,7 +6443,6 @@ static int haptics_probe(struct platform_device *pdev)
 	if ((chip->effects_count != 0) || (chip->primitives_count != 0)) {
 		input_set_capability(input_dev, EV_FF, FF_PERIODIC);
 		input_set_capability(input_dev, EV_FF, FF_CUSTOM);
-		input_set_capability(input_dev, EV_FF, FF_DAMPER);
 	}
 
 	if (chip->effects_count + chip->primitives_count > MAX_EFFECT_COUNT)
