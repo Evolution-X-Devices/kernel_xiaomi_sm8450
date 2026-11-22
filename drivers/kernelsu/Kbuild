@@ -165,8 +165,8 @@ ccflags-y += -DKSU_VERSION=$(KSU_VERSION)
 else
 # If there is no .git directory, use default version
 $(warning "KSU_GIT_VERSION not defined! It is better to make KernelSU-Next a git repository!")
-# Vendored copy of KernelSU-Next dev (7ccf6147): 30000 + 3553 commits
-KSU_VERSION_FALLBACK := 33553
+# Vendored copy of KernelSU-Next dev (32e25d58): 30000 + 3555 commits
+KSU_VERSION_FALLBACK := 33555
 $(info -- KernelSU-Next version fallback: $(KSU_VERSION_FALLBACK))
 ccflags-y += -DKSU_VERSION=$(KSU_VERSION_FALLBACK)
 endif
