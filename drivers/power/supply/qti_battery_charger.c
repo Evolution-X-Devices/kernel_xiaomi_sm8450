@@ -2133,6 +2133,15 @@ static ssize_t restrict_cur_store(const struct class *c,
 	int rc;
 	u32 fcc_ua, prev_fcc_ua;
 
+#ifndef CONFIG_MI_CHARGER_M81
+	/*
+	 * The Xiaomi ADSP firmware takes a thermal level index on
+	 * BATT_CHG_CTRL_LIM, not a current in uA (see
+	 * battery_psy_set_charge_current()), and does not bound check it.
+	 */
+	return -EOPNOTSUPP;
+#endif
+
 	if (kstrtou32(buf, 0, &fcc_ua) || fcc_ua > bcdev->thermal_fcc_ua)
 		return -EINVAL;
 
@@ -2168,6 +2177,11 @@ static ssize_t restrict_chg_store(const struct class *c,
 						battery_class);
 	int rc;
 	bool val;
+
+#ifndef CONFIG_MI_CHARGER_M81
+	/* Same as restrict_cur: BATT_CHG_CTRL_LIM is a thermal level index */
+	return -EOPNOTSUPP;
+#endif
 
 	if (kstrtobool(buf, &val))
 		return -EINVAL;
@@ -2445,6 +2459,22 @@ static ssize_t charging_enabled_store(const struct class *c,
 	if (kstrtobool(buf, &val))
 		return -EINVAL;
 
+#ifndef CONFIG_MI_CHARGER_M81
+	/*
+	 * Use the firmware "smart charging" navigation mode: bit 1 selects
+	 * the mode, bit 0 enables it and bits 23:16 hold the SoC threshold
+	 * (0 = stop right away). While it is active the firmware votes the
+	 * battery charge current to 0 and leaves the USB input alone, so the
+	 * device runs from the charger (bypass charging).
+	 */
+	rc = write_property_id(bcdev, &bcdev->psy_list[PSY_TYPE_XM],
+				XM_PROP_SMART_CHG, val ? 0x2 : 0x3);
+	if (rc < 0)
+		return rc;
+
+	return count;
+#endif
+
 	if (val) {
 		/*
 		 * Enable charging, i.e. set the restricted current back to
@@ -2477,7 +2507,20 @@ static ssize_t charging_enabled_show(const struct class *c,
 {
 	struct battery_chg_dev *bcdev = container_of(c, struct battery_chg_dev,
 						battery_class);
-	bool val = !bcdev->restrict_chg_en && bcdev->restrict_fcc_ua;
+	bool val;
+#ifndef CONFIG_MI_CHARGER_M81
+	struct psy_state *pst = &bcdev->psy_list[PSY_TYPE_XM];
+	int rc;
+
+	/* Reads back a status mask: bit 1 = navigation mode active */
+	rc = read_property_id(bcdev, pst, XM_PROP_SMART_CHG);
+	if (rc < 0)
+		return rc;
+
+	val = !(pst->prop[XM_PROP_SMART_CHG] & BIT(1));
+#else
+	val = !bcdev->restrict_chg_en && bcdev->restrict_fcc_ua;
+#endif
 
 	return scnprintf(buf, PAGE_SIZE, "%d\n", val);
 }
