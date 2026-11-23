@@ -1232,6 +1232,53 @@ static int haptics_adjust_lra_period(struct haptics_chip *chip, u32 *t_lra_us)
 #define SLEEP_CLK_CAL_DIVIDER			\
 	((chip->wa_flags & SLEEP_CLK_32K_SCALE) ? 600 : 586)
 #define CL_TLRA_ERROR_RANGE_PCT			20
+static void haptics_validate_boot_lra_f0(struct haptics_chip *chip)
+{
+	struct haptics_hw_config *config = &chip->config;
+	struct device_node *node = chip->dev->of_node;
+	u32 f0_min, f0_max, f0_default, f0_cnt, xbl_f0;
+	int rc_min, rc_max, rc_def, rc_cnt;
+
+	if (!config->cl_t_lra_us)
+		return;
+
+	rc_min = of_property_read_u32(node, "qcom,lra-f0-min", &f0_min);
+	rc_max = of_property_read_u32(node, "qcom,lra-f0-max", &f0_max);
+	rc_def = of_property_read_u32(node, "qcom,lra-f0-default", &f0_default);
+	rc_cnt = of_property_read_u32(node, "qcom,lra-f0-cal-count", &f0_cnt);
+
+	/* Optional DT properties: stay silent when none are configured */
+	if (rc_min == -EINVAL && rc_max == -EINVAL &&
+			rc_def == -EINVAL && rc_cnt == -EINVAL)
+		return;
+
+	if (rc_min < 0 || rc_max < 0 || rc_def < 0 || rc_cnt < 0) {
+		dev_warn(chip->dev,
+			"Incomplete qcom,lra-f0-* DT properties (min=%d, max=%d, default=%d, cal-count=%d)\n",
+			rc_min, rc_max, rc_def, rc_cnt);
+		return;
+	}
+
+	if (!f0_default || f0_min > f0_max) {
+		dev_warn(chip->dev,
+			"Invalid qcom,lra-f0-* DT bounds (min=%u, max=%u, default=%u)\n",
+			f0_min, f0_max, f0_default);
+		return;
+	}
+
+	xbl_f0 = USEC_PER_SEC / config->cl_t_lra_us;
+	dev_dbg(chip->dev, "boot XBL LRA F0 = %u Hz\n", xbl_f0);
+
+	if (xbl_f0 < f0_min || xbl_f0 > f0_max) {
+		dev_warn(chip->dev,
+			"Boot LRA F0 %u Hz (cal=%#x) out of range [%u, %u] Hz, using default %u Hz (cal=%#x)\n",
+			xbl_f0, config->rc_clk_cal_count,
+			f0_min, f0_max, f0_default, f0_cnt);
+		config->cl_t_lra_us = USEC_PER_SEC / f0_default;
+		config->rc_clk_cal_count = f0_cnt;
+	}
+}
+
 static int haptics_get_closeloop_lra_period(
 		struct haptics_chip *chip, bool in_boot)
 {
@@ -1241,10 +1288,6 @@ static int haptics_get_closeloop_lra_period(
 	bool auto_res_done;
 	u64 tmp;
 	int rc;
-	//protect low rate of xbl f0 abnormal for L18 only
-	int f0_mix, f0_max, f0_default, f0_cnt;
-	int rc1, rc2, rc3, rc4;
-	struct device_node *node = chip->dev->of_node;
 
 	/* read RC_CLK_CAL enabling mode */
 	rc = haptics_read(chip, chip->cfg_addr_base,
@@ -1380,37 +1423,8 @@ static int haptics_get_closeloop_lra_period(
 		tmp = div_u64(tmp, 293);
 		config->rc_clk_cal_count = div_u64(tmp, config->t_lra_us);
 
-		//protect low rate of xbl f0 abnormal for L18 only
-		if (in_boot) {
-			u32 xbl_f0 = USEC_PER_SEC / config->cl_t_lra_us;
-			dev_err(chip->dev, "xbl f0  =%d \n", xbl_f0);
-			rc1 = of_property_read_u32(node, "qcom,lra-f0-min", &f0_mix);
-			if (rc1 < 0) {
-				dev_err(chip->dev, "lra-f0-min failed, rc=%d\n", rc);
-			}
-			rc2 = of_property_read_u32(node, "qcom,lra-f0-max", &f0_max);
-			if (rc2 < 0) {
-				dev_err(chip->dev, "lra-f0-max failed, rc=%d\n", rc);
-			}
-			rc3 = of_property_read_u32(node, "qcom,lra-f0-default", &f0_default);
-			if (rc3 < 0) {
-				dev_err(chip->dev, "lra-f0-default failed, rc=%d\n", rc);
-			}
-			rc4 = of_property_read_u32(node, "qcom,lra-f0-cal-count", &f0_cnt);
-			if (rc4 < 0) {
-				dev_err(chip->dev, "lra-f0-cal-count failed, rc=%d\n", rc);
-			}
-			if (rc1 >= 0 && rc2 >= 0 && rc3 >= 0 && rc4 >= 0) {
-				if (xbl_f0 > f0_max || xbl_f0 < f0_mix) {
-					dev_err(chip->dev, "xbl f0 abnormal: %d ~ 0x%x use default: %d ~ 0x%x f0:%d - %d after boot\n",
-						xbl_f0, config->rc_clk_cal_count, f0_default, f0_cnt, f0_mix, f0_max);
-					config->cl_t_lra_us = USEC_PER_SEC / f0_default;
-					config->rc_clk_cal_count = f0_cnt;
-				}
-			} else {
-				dev_err(chip->dev, "lra-f0: default min max count must set together in dtsi\n");
-			}
-		}
+		if (in_boot)
+			haptics_validate_boot_lra_f0(chip);
 	} else {
 		dev_err(chip->dev, "Can't get close-loop LRA period in rc_clk_cal mode %u\n",
 				rc_clk_cal);
