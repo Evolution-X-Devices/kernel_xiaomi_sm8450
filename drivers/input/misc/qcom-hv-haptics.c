@@ -791,7 +791,6 @@ struct haptics_chip {
 	struct class			hap_class;
 	struct regulator		*hpwr_vreg;
 	struct hrtimer			hbst_off_timer;
-	struct hrtimer			dph_off_timer; /*DIRECT_PLAY turning off timer*/
 	struct notifier_block		hboost_nb;
 	struct notifier_block		lpass_ssr_nb;
 	struct mutex			vmax_lock;
@@ -2663,8 +2662,6 @@ static int haptics_load_constant_effect(struct haptics_chip *chip, u8 amplitude,
 
 	/* No effect data when playing constant waveform */
 	play->effect = NULL;
-
-	/*set play time*/
 	play->length_us = length_ms * USEC_PER_MSEC;
 
 	/* Fix Vmax to (hpwr_vreg_mv - hdrm_mv) in non-HBOOST regulator case */
@@ -3234,6 +3231,8 @@ static int haptics_upload_effect(struct input_dev *dev,
 	if (rc < 0)
 		return rc;
 
+	cancel_delayed_work_sync(&chip->stop_work);
+
 	/*
 	 * When switching between SWR and SPMI play, the haptics module doesn't
 	 * set HPWR_DISABLED status especially if triggering a SPMI play before
@@ -3259,8 +3258,7 @@ static int haptics_upload_effect(struct input_dev *dev,
 		amplitude = tmp / 0x7fff;
 		dev_dbg(chip->dev, "upload constant effect, length = %dms, amplitude = %#x\n",
 				length_ms, amplitude);
-		schedule_delayed_work(&chip->stop_work, msecs_to_jiffies(length_ms));
-		haptics_load_constant_effect(chip, amplitude, length_ms);
+		rc = haptics_load_constant_effect(chip, amplitude, length_ms);
 		if (rc < 0) {
 			dev_err(chip->dev, "set direct play failed, rc=%d\n",
 					rc);
@@ -3342,20 +3340,22 @@ static int haptics_playback(struct input_dev *dev, int effect_id, int val)
 {
 	struct haptics_chip *chip = input_get_drvdata(dev);
 	struct haptics_play_info *play = &chip->play;
+	int rc;
 
 	dev_dbg(chip->dev, "playback val = %d\n", val);
 	if (!!val) {
 		if (chip->config.measure_lra_impedance && chip->visense_enabled)
 			chip->pattern_start_time = ktime_get_boottime();
 
-		if (play->pattern_src == DIRECT_PLAY) {
-			u64 length_ns = play->length_us * NSEC_PER_USEC;
-			hrtimer_start(&chip->dph_off_timer,
-					ns_to_ktime(length_ns),
-					HRTIMER_MODE_REL);
-		}
+		rc = haptics_enable_play(chip, true);
+		if (rc < 0)
+			return rc;
 
-		return haptics_enable_play(chip, true);
+		if (play->pattern_src == DIRECT_PLAY && play->length_us)
+			mod_delayed_work(system_wq, &chip->stop_work,
+					msecs_to_jiffies(play->length_us / USEC_PER_MSEC));
+
+		return 0;
 	}
 
 	return 0;
@@ -6231,21 +6231,6 @@ static struct attribute *hap_class_attrs[] = {
 };
 ATTRIBUTE_GROUPS(hap_class);
 
-static enum hrtimer_restart haptics_disable_dph_timer(struct hrtimer *timer)
-{
-	struct haptics_chip *chip = container_of(timer,
-			struct haptics_chip, dph_off_timer);
-	int rc;
-
-	rc = haptics_enable_play(chip, false);
-	if (rc < 0)
-		dev_err(chip->dev, "disable haptics play failed, rc =%d\n", rc);
-	else
-		dev_dbg(chip->dev, "disable direct play haptics with timer\n");
-
-	return HRTIMER_NORESTART;
-}
-
 static bool is_swr_supported(struct haptics_chip *chip)
 {
 	/* HAP520_MV does not support soundwire */
@@ -6426,8 +6411,6 @@ static int haptics_probe(struct platform_device *pdev)
 	chip->fifo_empty_irq_en = false;
 	hrtimer_init(&chip->hbst_off_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	chip->hbst_off_timer.function = haptics_disable_hbst_timer;
-	hrtimer_init(&chip->dph_off_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	chip->dph_off_timer.function = haptics_disable_dph_timer;
 	INIT_DELAYED_WORK(&chip->stop_work, haptics_stop_constant_effect_play);
 	INIT_WORK(&chip->set_gain_work, haptics_set_gain_work);
 
@@ -6539,6 +6522,7 @@ static int haptics_remove(struct platform_device *pdev)
 	class_unregister(&chip->hap_class);
 	haptics_remove_debugfs(chip);
 	input_unregister_device(chip->input_dev);
+	cancel_delayed_work_sync(&chip->stop_work);
 	dev_set_drvdata(chip->dev, NULL);
 
 	return 0;
@@ -6586,6 +6570,7 @@ static int haptics_suspend_config(struct device *dev)
 	struct haptics_play_info *play = &chip->play;
 	int rc;
 
+	cancel_delayed_work_sync(&chip->stop_work);
 	mutex_lock(&play->lock);
 	if ((play->pattern_src == FIFO) &&
 			atomic_read(&play->fifo_status.is_busy)) {
@@ -6621,8 +6606,6 @@ static int haptics_suspend_config(struct device *dev)
 	rc = haptics_enable_hpwr_vreg(chip, false);
 	if (rc < 0)
 		return rc;
-
-	hrtimer_cancel(&chip->dph_off_timer);
 
 	return haptics_module_enable(chip, false);
 }
