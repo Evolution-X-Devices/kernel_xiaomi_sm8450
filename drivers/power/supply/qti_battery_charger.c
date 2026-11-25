@@ -1403,6 +1403,59 @@ static int battery_psy_set_charge_current(struct battery_chg_dev *bcdev,
 	return rc;
 }
 
+#ifndef CONFIG_MI_CHARGER_M81
+static bool battery_chg_is_bypass_active(struct battery_chg_dev *bcdev)
+{
+	struct psy_state *xm_pst = &bcdev->psy_list[PSY_TYPE_XM];
+	struct psy_state *usb_pst = &bcdev->psy_list[PSY_TYPE_USB];
+	struct psy_state *wls_pst = &bcdev->psy_list[PSY_TYPE_WLS];
+	int rc;
+
+	rc = read_property_id(bcdev, xm_pst, XM_PROP_SMART_CHG);
+	if (rc < 0 || !(xm_pst->prop[XM_PROP_SMART_CHG] & BIT(1)))
+		return false;
+
+	if (!read_property_id(bcdev, usb_pst, USB_ONLINE) &&
+	    usb_pst->prop[USB_ONLINE])
+		return true;
+
+	if (!read_property_id(bcdev, wls_pst, WLS_ONLINE) &&
+	    wls_pst->prop[WLS_ONLINE])
+		return true;
+
+	return false;
+}
+
+static ssize_t charging_state_show(struct device *dev,
+				   struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = to_power_supply(dev);
+	struct battery_chg_dev *bcdev = power_supply_get_drvdata(psy);
+	/*
+	 * Matches android.hardware.health.BatteryChargingState:
+	 * 1 = NORMAL, 4 = LONG_LIFE (triggers Battery Defender shield UI).
+	 */
+	int state = battery_chg_is_bypass_active(bcdev) ? 4 : 1;
+
+	return sysfs_emit(buf, "%d\n", state);
+}
+static DEVICE_ATTR_RO(charging_state);
+
+static struct attribute *battery_psy_attrs[] = {
+	&dev_attr_charging_state.attr,
+	NULL,
+};
+
+static const struct attribute_group battery_psy_attr_group = {
+	.attrs = battery_psy_attrs,
+};
+
+static const struct attribute_group *battery_psy_attr_groups[] = {
+	&battery_psy_attr_group,
+	NULL,
+};
+#endif
+
 static int battery_psy_get_prop(struct power_supply *psy,
 		enum power_supply_property prop,
 		union power_supply_propval *pval)
@@ -1454,6 +1507,11 @@ static int battery_psy_get_prop(struct power_supply *psy,
 		if (pval->intval == POWER_SUPPLY_STATUS_CHARGING &&
 			bcdev->report_power_absent)
 			pval->intval = POWER_SUPPLY_STATUS_DISCHARGING;
+#ifndef CONFIG_MI_CHARGER_M81
+		else if (pval->intval == POWER_SUPPLY_STATUS_CHARGING &&
+			battery_chg_is_bypass_active(bcdev))
+			pval->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
+#endif
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_COUNTER:
 		pval->intval = pst->prop[prop_id] * 1000;
@@ -1676,11 +1734,15 @@ static int battery_chg_init_psy(struct battery_chg_dev *bcdev)
 
 	psy_cfg.drv_data = bcdev;
 	psy_cfg.of_node = bcdev->dev->of_node;
+#ifndef CONFIG_MI_CHARGER_M81
+	psy_cfg.attr_grp = battery_psy_attr_groups;
+#endif
 
 	bcdev->psy_list[PSY_TYPE_BATTERY].psy =
 		devm_power_supply_register(bcdev->dev,
 						bcdev->match_data->batt_psy_desc,
 						&psy_cfg);
+	psy_cfg.attr_grp = NULL;
 	if (IS_ERR(bcdev->psy_list[PSY_TYPE_BATTERY].psy)) {
 		rc = PTR_ERR(bcdev->psy_list[PSY_TYPE_BATTERY].psy);
 		bcdev->psy_list[PSY_TYPE_BATTERY].psy = NULL;
@@ -2471,6 +2533,9 @@ static ssize_t charging_enabled_store(const struct class *c,
 				XM_PROP_SMART_CHG, val ? 0x2 : 0x3);
 	if (rc < 0)
 		return rc;
+
+	if (bcdev->psy_list[PSY_TYPE_BATTERY].psy)
+		power_supply_changed(bcdev->psy_list[PSY_TYPE_BATTERY].psy);
 
 	return count;
 #endif
